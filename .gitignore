@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+*.pnp
+*.pnp.js
+
+# Build outputs
+extension/dist/
+extension/.env
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.swp
+*.swo
+
+# Local env files
+.env
+.env.local
+.env.*.local
+
+# Supabase local
+supabase/.env.local
+supabase/.branches
+supabase/.temp
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Temp files
+*.tmp
+*.temp
