@@ -548,6 +548,10 @@ async function showSubscriptionPrompt(
 
   console.log('[Subscribe Any] Showing subscription prompt with products:', analysis.products)
 
+  // Get existing subscriptions to filter out already subscribed items
+  const existingSubsResponse = await chrome.runtime.sendMessage({ type: 'GET_SUBSCRIPTIONS' })
+  const existingSubscriptions = existingSubsResponse?.subscriptions || []
+
   // Use all products, not just recurring ones - user can decide
   let productsToShow = analysis.products
   if (productsToShow.length === 0) {
@@ -727,29 +731,33 @@ async function showSubscriptionPrompt(
         font-weight: 500;
       }
 
+      .sa-product-frequency {
+        margin-top: 8px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .sa-product-frequency-label {
+        font-size: 12px;
+        color: #666;
+        white-space: nowrap;
+      }
+
+      .sa-product-frequency-select {
+        flex: 1;
+        padding: 6px 10px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        font-size: 13px;
+        background: white;
+        cursor: pointer;
+      }
+
       .sa-footer {
         padding: 20px;
         border-top: 1px solid #e5e5e5;
         background: #f9fafb;
-      }
-
-      .sa-frequency {
-        margin-bottom: 12px;
-      }
-
-      .sa-frequency-label {
-        font-size: 13px;
-        color: #666;
-        margin-bottom: 6px;
-      }
-
-      .sa-frequency-select {
-        width: 100%;
-        padding: 8px 12px;
-        border: 1px solid #ddd;
-        border-radius: 6px;
-        font-size: 14px;
-        background: white;
       }
 
       .sa-subscribe-btn {
@@ -786,7 +794,7 @@ async function showSubscriptionPrompt(
     <div class="sa-header">
       <h3 class="sa-title">
         <span class="sa-logo">SA</span>
-        Subscribe Any
+        We recommend you buy this again
       </h3>
       <button class="sa-close" id="sa-close">&times;</button>
     </div>
@@ -796,18 +804,8 @@ async function showSubscriptionPrompt(
     </div>
 
     <div class="sa-footer">
-      <div class="sa-frequency">
-        <div class="sa-frequency-label">Remind me to reorder every:</div>
-        <select class="sa-frequency-select" id="sa-frequency">
-          <option value="7">Weekly</option>
-          <option value="14">Bi-weekly</option>
-          <option value="30" selected>Monthly</option>
-          <option value="60">Every 2 months</option>
-          <option value="90">Quarterly</option>
-        </select>
-      </div>
       <button class="sa-subscribe-btn" id="sa-subscribe" disabled>
-        Subscribe to selected items
+        Please help us remind you
       </button>
     </div>
   `
@@ -829,57 +827,67 @@ async function showSubscriptionPrompt(
   document.body.appendChild(backdrop)
   document.body.appendChild(container)
 
-  // Helper to convert days to label
-  function frequencyDaysToLabel(days: number | null): string {
-    if (!days) return ''
-    if (days <= 7) return 'Weekly'
-    if (days <= 14) return 'Bi-weekly'
-    if (days <= 30) return 'Monthly'
-    if (days <= 60) return 'Every 2 months'
-    return 'Quarterly'
-  }
-
-  // Populate products
+  // Populate products - ONLY show subscribable items (isRecurring: true)
+  // and NOT already subscribed
   const productsContainer = document.getElementById('sa-products')!
   const selectedProducts = new Set<number>()
+  const productFrequencies = new Map<number, number>() // Store frequency for each product
 
-  productsToShow.forEach((product, index) => {
-    const suggestedLabel = product.suggestedFrequencyDays
-      ? frequencyDaysToLabel(product.suggestedFrequencyDays)
-      : null
+  // Filter to only subscribable products that aren't already subscribed
+  const subscribableProducts = productsToShow.filter(p => {
+    if (p.isRecurring === false) return false // Exclude durables
+    // Check if already subscribed to this product
+    return !existingSubscriptions.some((sub: any) =>
+      sub.product_name.toLowerCase() === p.name.toLowerCase()
+    )
+  })
+
+  if (subscribableProducts.length === 0) {
+    productsContainer.innerHTML = `
+      <div style="text-align: center; padding: 30px; color: #666;">
+        <p>We found items from this order, but you're already subscribed to all of them!</p>
+        <p style="font-size: 13px;">Check your subscriptions to manage reminders.</p>
+      </div>
+    `
+    return
+  }
+
+  subscribableProducts.forEach((product, index) => {
+    const suggestedDays = product.suggestedFrequencyDays || 30
 
     const productEl = document.createElement('div')
     productEl.className = 'sa-product'
     productEl.innerHTML = `
-      <input type="checkbox" class="sa-checkbox" data-index="${index}" data-frequency="${product.suggestedFrequencyDays || 30}">
+      <input type="checkbox" class="sa-checkbox" data-index="${index}">
       <div class="sa-product-info">
         <div class="sa-product-name">${escapeHtml(product.name)}</div>
         <div class="sa-product-price">
           ${product.price ? `$${product.price.toFixed(2)}` : ''}
           ${product.category ? `• ${escapeHtml(product.category)}` : ''}
-          ${suggestedLabel ? `<span class="sa-suggested-freq">Suggested: ${suggestedLabel}</span>` : ''}
+        </div>
+        <div class="sa-product-frequency">
+          <span class="sa-product-frequency-label">Remind me every:</span>
+          <select class="sa-product-frequency-select" data-index="${index}">
+            <option value="7" ${suggestedDays === 7 ? 'selected' : ''}>Weekly</option>
+            <option value="14" ${suggestedDays === 14 ? 'selected' : ''}>Bi-weekly</option>
+            <option value="30" ${suggestedDays === 30 ? 'selected' : ''}>Monthly</option>
+            <option value="60" ${suggestedDays === 60 ? 'selected' : ''}>Every 2 months</option>
+            <option value="90" ${suggestedDays === 90 ? 'selected' : ''}>Quarterly</option>
+          </select>
         </div>
       </div>
     `
 
-    const checkbox = productEl.querySelector('input')!
+    // Initialize frequency with suggested value
+    productFrequencies.set(index, suggestedDays)
+
+    const checkbox = productEl.querySelector('.sa-checkbox')! as HTMLInputElement
+    const frequencySelect = productEl.querySelector('.sa-product-frequency-select')! as HTMLSelectElement
+
     checkbox.addEventListener('change', () => {
       if (checkbox.checked) {
         selectedProducts.add(index)
         productEl.classList.add('selected')
-        // Update frequency dropdown to match first selected product's suggestion
-        if (selectedProducts.size === 1) {
-          const suggestedDays = product.suggestedFrequencyDays
-          if (suggestedDays) {
-            const frequencySelect = document.getElementById('sa-frequency') as HTMLSelectElement
-            // Find the closest matching frequency option
-            const options = [7, 14, 30, 60, 90]
-            const closest = options.reduce((prev, curr) =>
-              Math.abs(curr - suggestedDays) < Math.abs(prev - suggestedDays) ? curr : prev
-            )
-            frequencySelect.value = String(closest)
-          }
-        }
       } else {
         selectedProducts.delete(index)
         productEl.classList.remove('selected')
@@ -887,8 +895,13 @@ async function showSubscriptionPrompt(
       updateSubscribeButton()
     })
 
+    frequencySelect.addEventListener('change', (e) => {
+      const value = parseInt((e.target as HTMLSelectElement).value)
+      productFrequencies.set(index, value)
+    })
+
     productEl.addEventListener('click', (e) => {
-      if ((e.target as HTMLElement).tagName !== 'INPUT') {
+      if ((e.target as HTMLElement).tagName !== 'INPUT' && (e.target as HTMLElement).tagName !== 'SELECT') {
         checkbox.checked = !checkbox.checked
         checkbox.dispatchEvent(new Event('change'))
       }
@@ -903,8 +916,8 @@ async function showSubscriptionPrompt(
     btn.disabled = selectedProducts.size === 0
     btn.textContent =
       selectedProducts.size === 0
-        ? 'Select items to subscribe'
-        : `Subscribe to ${selectedProducts.size} item${selectedProducts.size > 1 ? 's' : ''}`
+        ? 'Select items above'
+        : `Help me remember ${selectedProducts.size} item${selectedProducts.size > 1 ? 's' : ''}`
   }
 
   // Close button
@@ -919,17 +932,12 @@ async function showSubscriptionPrompt(
 
   // Subscribe button
   document.getElementById('sa-subscribe')!.addEventListener('click', async () => {
-    const frequency = parseInt(
-      (document.getElementById('sa-frequency') as HTMLSelectElement).value
-    )
-
-    const productsToSubscribe = Array.from(selectedProducts).map(
-      (idx) => productsToShow[idx]
-    )
-
-    // Send subscription request to background
+    // Send subscription request to background (each with its own frequency)
     try {
-      for (const product of productsToSubscribe) {
+      for (const idx of selectedProducts) {
+        const product = subscribableProducts[idx]
+        const frequency = productFrequencies.get(idx) || 30
+
         await chrome.runtime.sendMessage({
           type: 'CREATE_SUBSCRIPTION',
           payload: {
@@ -945,7 +953,7 @@ async function showSubscriptionPrompt(
       }
 
       // Show success and close
-      showSuccessMessage(productsToSubscribe.length)
+      showSuccessMessage(selectedProducts.size)
       container.remove()
     } catch (error) {
       console.error('[Subscribe Any] Error creating subscription:', error)
