@@ -52,8 +52,19 @@ async function handleMessage(
 ): Promise<unknown> {
   switch (message.type) {
     case 'ANALYZE_PAGE': {
-      const { content, heuristicConfidence } = message.payload as { url: string; title: string; content: string; heuristicConfidence?: number }
-      return analyzePageContent(content, heuristicConfidence)
+      const payload = message.payload as
+        | { url: string; title: string; content: string; heuristicConfidence?: number }
+        | { url: string; title: string; htmlContent: string; textContent: string; heuristicConfidence?: number }
+
+      // Handle both old and new payload formats
+      if ('htmlContent' in payload) {
+        return analyzePageContent(
+          { htmlContent: payload.htmlContent, textContent: payload.textContent },
+          payload.heuristicConfidence
+        )
+      } else {
+        return analyzePageContent(payload.content, payload.heuristicConfidence)
+      }
     }
 
     case 'CREATE_SUBSCRIPTION': {
@@ -105,15 +116,23 @@ async function handleMessage(
 /**
  * Analyze page content using LLM
  */
-async function analyzePageContent(content: string, heuristicConfidence = 0) {
+async function analyzePageContent(
+  contentOrHtml: string | { htmlContent: string; textContent: string },
+  heuristicConfidence = 0
+) {
   try {
     console.log('[Subscribe Any BG] Getting LLM provider...')
     const provider = await getLLMProvider()
 
+    // Normalize content to string for fallback
+    const contentString = typeof contentOrHtml === 'string'
+      ? contentOrHtml
+      : contentOrHtml.htmlContent
+
     if (!provider) {
       console.log('[Subscribe Any BG] No LLM provider configured, using fallback')
       // Return a basic analysis based on content patterns
-      const fallback = createFallbackAnalysis(content)
+      const fallback = createFallbackAnalysis(contentString)
       // If heuristics were confident, override the fallback
       if (heuristicConfidence >= 0.8) {
         fallback.isOrderConfirmation = true
@@ -123,7 +142,7 @@ async function analyzePageContent(content: string, heuristicConfidence = 0) {
     }
 
     console.log('[Subscribe Any BG] Calling LLM analyzeOrderPage...')
-    const analysis = await provider.analyzeOrderPage(content)
+    const analysis = await provider.analyzeOrderPage(contentOrHtml)
     console.log('[Subscribe Any BG] LLM analysis result:', analysis)
 
     // If LLM says no but heuristics were very confident, trust heuristics
@@ -136,7 +155,10 @@ async function analyzePageContent(content: string, heuristicConfidence = 0) {
     return { analysis }
   } catch (error) {
     console.error('[Subscribe Any BG] Error analyzing page:', error)
-    const fallback = createFallbackAnalysis(content)
+    const contentString = typeof contentOrHtml === 'string'
+      ? contentOrHtml
+      : contentOrHtml.htmlContent
+    const fallback = createFallbackAnalysis(contentString)
     if (heuristicConfidence >= 0.8) {
       fallback.isOrderConfirmation = true
       fallback.confidence = heuristicConfidence
@@ -183,6 +205,7 @@ function createFallbackAnalysis(content: string) {
     quantity: number
     isRecurring: boolean
     category: string | null
+    suggestedFrequencyDays: number | null
   }> = []
 
   // Look for product patterns - lines that have product-like descriptions
@@ -208,7 +231,8 @@ function createFallbackAnalysis(content: string) {
             price: price && price > 0 && price < 10000 ? price : null,
             quantity: 1,
             isRecurring: true,
-            category: null
+            category: null,
+            suggestedFrequencyDays: 30
           })
         }
       }
@@ -227,7 +251,8 @@ function createFallbackAnalysis(content: string) {
       price: prices[0] || null,
       quantity: 1,
       isRecurring: true,
-      category: null
+      category: null,
+      suggestedFrequencyDays: 30
     })
   }
 

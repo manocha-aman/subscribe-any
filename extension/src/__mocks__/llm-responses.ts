@@ -11,14 +11,16 @@ export const mockAmazonOrderResponse: OrderAnalysis = {
       price: 59.99,
       quantity: 1,
       isRecurring: true,
-      category: 'Pet Supplies'
+      category: 'Pet Supplies',
+      suggestedFrequencyDays: 30
     },
     {
       name: 'Dog Treats Variety Pack',
       price: 24.99,
       quantity: 2,
       isRecurring: true,
-      category: 'Pet Supplies'
+      category: 'Pet Supplies',
+      suggestedFrequencyDays: 14
     }
   ],
   retailer: 'Amazon',
@@ -34,14 +36,16 @@ export const mockWalmartOrderResponse: OrderAnalysis = {
       price: 44.97,
       quantity: 1,
       isRecurring: true,
-      category: 'Baby'
+      category: 'Baby',
+      suggestedFrequencyDays: 30
     },
     {
       name: 'Huggies Wipes, 6 pack',
       price: 12.99,
       quantity: 1,
       isRecurring: true,
-      category: 'Baby'
+      category: 'Baby',
+      suggestedFrequencyDays: 14
     }
   ],
   retailer: 'Walmart',
@@ -65,14 +69,16 @@ export const mockOneTimeProductResponse: OrderAnalysis = {
       price: 499.99,
       quantity: 1,
       isRecurring: false,
-      category: 'Electronics'
+      category: 'Electronics',
+      suggestedFrequencyDays: null
     },
     {
       name: 'HDMI Cable 6ft',
       price: 12.99,
       quantity: 2,
       isRecurring: false,
-      category: 'Electronics'
+      category: 'Electronics',
+      suggestedFrequencyDays: null
     }
   ],
   retailer: 'Best Buy',
@@ -88,14 +94,16 @@ export const mockMixedProductResponse: OrderAnalysis = {
       price: 18.99,
       quantity: 1,
       isRecurring: true,
-      category: 'Health'
+      category: 'Health',
+      suggestedFrequencyDays: 60
     },
     {
       name: 'Yoga Mat',
       price: 29.99,
       quantity: 1,
       isRecurring: false,
-      category: 'Sports'
+      category: 'Sports',
+      suggestedFrequencyDays: null
     }
   ],
   retailer: 'Amazon',

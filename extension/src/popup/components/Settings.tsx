@@ -12,11 +12,13 @@ export function Settings() {
     showOnOrderDetails: true
   })
   const [userEmail, setUserEmail] = useState<string | null>(null)
+  const [geminiKey, setGeminiKey] = useState('')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     loadSettings()
     loadUser()
+    loadGeminiKey()
   }, [])
 
   const loadSettings = async () => {
@@ -32,10 +34,16 @@ export function Settings() {
     setUserEmail((user as { email?: string })?.email || null)
   }
 
+  const loadGeminiKey = async () => {
+    const result = await chrome.storage.local.get('geminiApiKey')
+    setGeminiKey(result.geminiApiKey || '')
+  }
+
   const handleSave = async () => {
     setSaving(true)
     try {
       await chrome.storage.sync.set(settings)
+      await chrome.storage.local.set({ geminiApiKey: geminiKey })
       alert('Settings saved!')
     } catch (error) {
       console.error('Error saving settings:', error)
@@ -101,6 +109,36 @@ export function Settings() {
         <p className="form-hint" style={{ marginTop: '8px' }}>
           Browser notifications are always enabled when reminders are due.
         </p>
+      </div>
+
+      <div className="settings-section">
+        <h3 className="settings-title">AI Product Detection</h3>
+
+        <div style={{ marginBottom: '12px' }}>
+          <label style={{ fontSize: '14px', display: 'block', marginBottom: '6px' }}>
+            Gemini API Key
+          </label>
+          <input
+            type="password"
+            value={geminiKey}
+            onChange={(e) => setGeminiKey(e.target.value)}
+            placeholder="AIza..."
+            style={{
+              width: '100%',
+              padding: '8px 12px',
+              border: '1px solid #ddd',
+              borderRadius: '6px',
+              fontSize: '14px',
+              fontFamily: 'monospace'
+            }}
+          />
+          <p className="form-hint" style={{ marginTop: '6px' }}>
+            Required for AI-powered product detection. Get your free API key from{' '}
+            <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer">
+              AI Studio (Google)
+            </a>. Stored locally on your device.
+          </p>
+        </div>
       </div>
 
       <button

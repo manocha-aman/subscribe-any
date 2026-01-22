@@ -1,97 +1,72 @@
 import type { PageDetectionResult } from '@/types'
 
-// Supported e-commerce stores
-export const SUPPORTED_STORES = [
-  { name: 'Amazon', pattern: /amazon\.(com|co\.uk|de|fr|es|it|ca|com\.au)/i, logo: 'A' },
-  { name: 'Walmart', pattern: /walmart\.com/i, logo: 'W' },
-  { name: 'Target', pattern: /target\.(com|com\.au)/i, logo: 'T' },
-  { name: 'Kmart', pattern: /kmart\.(com|com\.au)/i, logo: 'K' },
-  { name: 'Best Buy', pattern: /bestbuy\.com/i, logo: 'B' },
-  { name: 'eBay', pattern: /ebay\.(com|co\.uk|de|com\.au)/i, logo: 'e' },
-  { name: 'Shopify', pattern: /myshopify\.com/i, logo: 'S' },
-  { name: 'Etsy', pattern: /etsy\.com/i, logo: 'E' },
-  { name: 'Nike', pattern: /nike\.com/i, logo: 'N' },
-  { name: 'Apple', pattern: /apple\.com/i, logo: '' },
-  { name: 'Costco', pattern: /costco\.com/i, logo: 'C' },
-  { name: 'Kroger', pattern: /kroger\.com/i, logo: 'K' },
-  { name: 'Whole Foods', pattern: /wholefoodsmarket\.com/i, logo: 'W' },
-  { name: 'CVS', pattern: /cvs\.com/i, logo: 'C' },
-  { name: 'Walgreens', pattern: /walgreens\.com/i, logo: 'W' },
-  { name: 'Chewy', pattern: /chewy\.com/i, logo: 'C' },
-  { name: 'Petco', pattern: /petco\.com/i, logo: 'P' },
-  { name: 'Instacart', pattern: /instacart\.com/i, logo: 'I' },
-  { name: 'DoorDash', pattern: /doordash\.com/i, logo: 'D' },
-  { name: 'Uber Eats', pattern: /ubereats\.com/i, logo: 'U' },
-  { name: 'Starbucks', pattern: /starbucks\.com/i, logo: 'S' },
-  { name: 'Big W', pattern: /bigw\.com\.au/i, logo: 'W' },
-  { name: 'Bunnings', pattern: /bunnings\.com\.au/i, logo: 'B' },
-  { name: 'Woolworths', pattern: /woolworths\.com\.au/i, logo: 'W' },
-  { name: 'Bunnings', pattern: /bunnings\.com\.au/i, logo: 'B' }
-]
-
-// Remove duplicate Bunnings
-
 /**
- * Detect if current page is a supported store
+ * Detect store from URL - extracts retailer name from hostname
+ * Works universally for ANY store (no hardcoded list needed)
  */
 export function detectStore(url: string): { name: string; logo: string } | null {
-  for (const store of SUPPORTED_STORES) {
-    if (store.pattern.test(url)) {
-      return { name: store.name, logo: store.logo }
-    }
+  try {
+    const hostname = new URL(url).hostname.replace('www.', '')
+    // Extract the main domain name (e.g., "amazon" from "amazon.com.au")
+    const parts = hostname.split('.')
+    const name = parts[0].charAt(0).toUpperCase() + parts[0].slice(1)
+    const logo = name.charAt(0).toUpperCase()
+    return { name, logo }
+  } catch {
+    return null
   }
-  return null
 }
 
-// URL patterns that indicate order confirmation pages
+// Generic URL patterns that indicate order confirmation pages (works for ANY store)
 const ORDER_CONFIRMATION_PATTERNS = [
-  { pattern: /amazon\.\w+\/gp\/buy\/thankyou/i, trigger: 'amazon-thankyou', confidence: 0.95 },
-  { pattern: /amazon\.\w+\/gp\/css\/summary/i, trigger: 'amazon-summary', confidence: 0.85 },
-  { pattern: /walmart\.com\/checkout\/order-confirmation/i, trigger: 'walmart-confirmation', confidence: 0.95 },
-  { pattern: /target\.(com|com\.au)\/(co-thankyou|spc\/order\/thankyou)/i, trigger: 'target-thankyou', confidence: 0.95 },
-  { pattern: /kmart\.(com|com\.au).*\/order.*thank/i, trigger: 'kmart-thankyou', confidence: 0.95 },
-  { pattern: /\/spc\/order\/thankyou/i, trigger: 'spc-thankyou', confidence: 0.95 },
-  { pattern: /kmart\.(com|com\.au)\/checkout\/order-confirmation/i, trigger: 'kmart-confirmation', confidence: 0.98 },
-  { pattern: /target\.(com|com\.au)\/checkout\/order-confirmation/i, trigger: 'target-checkout-confirmation', confidence: 0.98 },
-  { pattern: /\/checkout\/order-confirmation/i, trigger: 'checkout-order-confirmation', confidence: 0.95 },
-  { pattern: /\/order-confirmation/i, trigger: 'url-order-confirmation', confidence: 0.9 },
-  { pattern: /\/order\/confirm/i, trigger: 'url-order-confirm', confidence: 0.85 },
-  { pattern: /\/order\/success/i, trigger: 'url-order-success', confidence: 0.85 },
-  { pattern: /\/checkout\/complete/i, trigger: 'url-checkout-complete', confidence: 0.85 },
-  { pattern: /\/checkout\/thank-?you/i, trigger: 'url-thank-you', confidence: 0.8 },
-  { pattern: /\/order\/thank-?you/i, trigger: 'url-order-thank-you', confidence: 0.9 },
-  { pattern: /\/thank-?you/i, trigger: 'url-thank-you', confidence: 0.7 },
-  { pattern: /\/order\/thank/i, trigger: 'url-order-thank', confidence: 0.8 },
-  { pattern: /\/purchase\/complete/i, trigger: 'url-purchase-complete', confidence: 0.85 },
-  { pattern: /\/confirmation\/?$/i, trigger: 'url-confirmation', confidence: 0.7 },
-  { pattern: /myshopify\.com\/\d+\/orders\/\d+/i, trigger: 'shopify-order', confidence: 0.9 },
-  { pattern: /\/orders\/\d+\/authenticate/i, trigger: 'shopify-authenticate', confidence: 0.85 }
+  // Generic order confirmation patterns
+  { pattern: /\/checkout\/order-confirmation/i, trigger: 'checkout-order-confirmation', confidence: 0.9 },
+  { pattern: /\/order-confirmation/i, trigger: 'url-order-confirmation', confidence: 0.85 },
+  { pattern: /\/order\/confirm/i, trigger: 'url-order-confirm', confidence: 0.8 },
+  { pattern: /\/order\/success/i, trigger: 'url-order-success', confidence: 0.8 },
+  { pattern: /\/checkout\/complete/i, trigger: 'url-checkout-complete', confidence: 0.8 },
+  { pattern: /\/checkout\/thank-?you/i, trigger: 'url-checkout-thank-you', confidence: 0.75 },
+  { pattern: /\/order\/thank-?you/i, trigger: 'url-order-thank-you', confidence: 0.85 },
+  { pattern: /\/thank-?you.*order/i, trigger: 'url-thank-you-order', confidence: 0.75 },
+  { pattern: /\/purchase\/complete/i, trigger: 'url-purchase-complete', confidence: 0.8 },
+  { pattern: /\/receipt/i, trigger: 'url-receipt', confidence: 0.7 },
+  { pattern: /\/confirmation\/?$/i, trigger: 'url-confirmation', confidence: 0.6 },
+  // Generic order view patterns (Shopify, WooCommerce, etc.)
+  { pattern: /\/orders\/\d+/i, trigger: 'url-order-view', confidence: 0.7 },
+  { pattern: /\/order\/\d+/i, trigger: 'url-order-id', confidence: 0.7 }
 ]
 
 // URL patterns that indicate order details/history pages (for viewing past orders)
 const ORDER_DETAILS_PATTERNS = [
-  { pattern: /amazon\.\w+\/gp\/css\/order-details/i, trigger: 'amazon-order-details', confidence: 0.9 },
-  { pattern: /amazon\.\w+\/gp\/your-account\/order-details/i, trigger: 'amazon-order-details-2', confidence: 0.9 },
+  // Specific order detail pages (high confidence)
+  { pattern: /\/order-details/i, trigger: 'order-details', confidence: 0.9 },
+  { pattern: /\/order\/details/i, trigger: 'order-slash-details', confidence: 0.9 },
+  { pattern: /\/previous-orders.*order/i, trigger: 'previous-order-details', confidence: 0.9 },
+  { pattern: /\/my-account.*order/i, trigger: 'account-order', confidence: 0.85 },
+  { pattern: /\/account.*order-details/i, trigger: 'account-order-details', confidence: 0.9 },
   { pattern: /\/orders\/\d+/i, trigger: 'order-details-id', confidence: 0.85 },
   { pattern: /\/order\/\d+/i, trigger: 'order-detailed-id', confidence: 0.85 },
-  { pattern: /\/order-details/i, trigger: 'order-details', confidence: 0.85 },
+  { pattern: /orderId=/i, trigger: 'order-id-param', confidence: 0.85 },
+  { pattern: /order_id=/i, trigger: 'order-id-param-underscore', confidence: 0.85 },
   { pattern: /\/order\/view/i, trigger: 'order-view', confidence: 0.85 },
-  { pattern: /myaccount\/orders/i, trigger: 'account-orders', confidence: 0.8 },
-  { pattern: /\/order-history/i, trigger: 'order-history', confidence: 0.8 },
-  { pattern: /\/your-orders/i, trigger: 'your-orders', confidence: 0.8 }
+  { pattern: /\/view-order/i, trigger: 'view-order', confidence: 0.85 },
+  // Order history pages (lower confidence - might be list not detail)
+  { pattern: /\/order-history/i, trigger: 'order-history', confidence: 0.7 },
+  { pattern: /\/your-orders/i, trigger: 'your-orders', confidence: 0.7 },
+  { pattern: /\/purchase-history/i, trigger: 'purchase-history', confidence: 0.7 },
 ]
 
 // URL patterns that indicate NOT an order confirmation
 const EXCLUDE_PATTERNS = [
-  /\/cart/i,
+  /\/cart\/?$/i,
+  /\/cart\?/i,
   /\/checkout\/?$/i,
   /\/dp\//i,  // Amazon product pages
-  /\/product\//i,
-  /\/order-history/i,
-  /\/orders\/?$/i,  // Order list, not confirmation
-  /\/account/i,
+  /\/product\/[^\/]+\/?$/i,  // Product detail pages (but not /product/order)
   /\/login/i,
-  /\/signin/i
+  /\/signin/i,
+  /\/register/i,
+  /\/password/i,
 ]
 
 // Title patterns that indicate order confirmation
@@ -215,11 +190,10 @@ export function isLikelyOrderConfirmationPage(page: {
   // Require minimum confidence threshold
   // Higher threshold if only content signals (no URL or title match)
   const hasUrlOrTitleSignal = triggers.some(
-    t => t.startsWith('url-') || t.startsWith('title-') ||
-         t.startsWith('amazon-') || t.startsWith('walmart-') ||
-         t.startsWith('target-') || t.startsWith('shopify-')
+    t => t.startsWith('url-') || t.startsWith('title-') || t.startsWith('checkout-')
   )
-  const threshold = hasUrlOrTitleSignal ? 0.5 : 0.8
+  // Lower threshold since LLM validates - we want to be more permissive in triggering
+  const threshold = hasUrlOrTitleSignal ? 0.4 : 0.7
 
   return {
     isLikelyOrderConfirmation: normalizedConfidence >= threshold && triggers.length > 0,
@@ -229,17 +203,71 @@ export function isLikelyOrderConfirmationPage(page: {
 }
 
 /**
- * Extract clean text content from HTML for LLM analysis
+ * Extract page content for LLM analysis
+ * Returns both structured HTML (with attributes preserved) and plain text
  */
-export function extractPageContent(html: string): string {
-  // Remove script and style tags
+export function extractPageContent(html: string): {
+  html: string   // Cleaned but structured HTML with attributes
+  text: string   // Plain text from body
+} {
+  // Remove scripts, styles, and other non-content elements
   let content = html
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
     .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
     .replace(/<noscript\b[^<]*(?:(?!<\/noscript>)<[^<]*)*<\/noscript>/gi, '')
+    .replace(/<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>/gi, '')
+    .replace(/<link\b[^>]*>/gi, '')
+    .replace(/<meta\b[^>]*>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '')  // HTML comments
 
-  // Remove HTML tags but keep text
-  content = content.replace(/<[^>]+>/g, ' ')
+  // Remove common noise elements - but be more selective, don't remove all nav/header/footer
+  // Only remove if they clearly don't contain order info
+  content = content
+    .replace(/<(header|footer|nav|aside)\b[^>]*class="[^"]*(?:main|site|global)[^"]*"[^>]*>[\s\S]*?<\/\1>/gi, '')
+
+  // Simplify attributes - KEEP MORE attributes for better semantic understanding
+  content = content.replace(/<([a-z][a-z0-9]*)\s+([^>]*)>/gi, (_match, tag, attrs) => {
+    const keepAttrs: string[] = []
+
+    // Keep ALL class names (they contain semantic information)
+    const classMatch = attrs.match(/class\s*=\s*["']([^"']*)["']/i)
+    if (classMatch) {
+      keepAttrs.push(`class="${classMatch[1]}"`)
+    }
+
+    // Keep ALL id attributes
+    const idMatch = attrs.match(/id\s*=\s*["']([^"']*)["']/i)
+    if (idMatch) {
+      keepAttrs.push(`id="${idMatch[1]}"`)
+    }
+
+    // Keep ALL data-* attributes (they often contain product info)
+    const dataMatches = attrs.match(/data-[a-z0-9-]+\s*=\s*["'][^"']*["']/gi) || []
+    dataMatches.forEach((d: string) => keepAttrs.push(d))
+
+    // Keep semantic attributes
+    const semanticAttrs = ['role', 'aria-label', 'aria-labelledby', 'aria-describedby', 'itemprop', 'itemscope', 'itemtype']
+    semanticAttrs.forEach((attr) => {
+      const match = attrs.match(new RegExp(`${attr}\\s*=\\s*["']([^"']*)["']`, 'i'))
+      if (match) keepAttrs.push(`${attr}="${match[1]}"`)
+    })
+
+    // Keep href on anchor tags (for product context)
+    if (tag.toLowerCase() === 'a') {
+      const hrefMatch = attrs.match(/href\s*=\s*["']([^"']*)["']/i)
+      if (hrefMatch) keepAttrs.push(`href="${hrefMatch[1]}"`)
+    }
+
+    // Keep src on img tags (for product images)
+    if (tag.toLowerCase() === 'img') {
+      const srcMatch = attrs.match(/src\s*=\s*["']([^"']*)["']/i)
+      if (srcMatch) keepAttrs.push(`src="${srcMatch[1]}"`)
+      const altMatch = attrs.match(/alt\s*=\s*["']([^"']*)["']/i)
+      if (altMatch) keepAttrs.push(`alt="${altMatch[1]}"`)
+    }
+
+    return keepAttrs.length > 0 ? `<${tag} ${keepAttrs.join(' ')}>` : `<${tag}>`
+  })
 
   // Decode HTML entities
   content = content
@@ -250,21 +278,39 @@ export function extractPageContent(html: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
 
-  // Normalize whitespace
-  content = content.replace(/\s+/g, ' ').trim()
+  // Extract plain text (remove all tags)
+  let text = content
+    .replace(/<[^>]+>/g, ' ')  // Remove all HTML tags
+    .replace(/\s+/g, ' ')  // Normalize whitespace
+    .trim()
 
-  // Limit length to avoid sending too much to LLM
-  const MAX_LENGTH = 50000
-  if (content.length > MAX_LENGTH) {
-    content = content.substring(0, MAX_LENGTH)
+  // Clean up HTML but keep structure
+  let htmlContent = content
+    .replace(/<([a-z][a-z0-9]*)[^>]*>\s*<\/\1>/gi, '')  // Empty tags
+    .replace(/\s+/g, ' ')  // Normalize whitespace
+    .replace(/>\s+</g, '><')  // Remove space between tags
+    .replace(/>\s+/g, '> ')  // Single space after tags
+    .replace(/\s+</g, ' <')  // Single space before tags
+    .trim()
+
+  // Increased limit from 40k to 60k chars for better coverage
+  const MAX_HTML_LENGTH = 60000
+  const MAX_TEXT_LENGTH = 30000
+
+  if (htmlContent.length > MAX_HTML_LENGTH) {
+    htmlContent = htmlContent.substring(0, MAX_HTML_LENGTH) + '...[truncated]'
   }
 
-  return content
+  if (text.length > MAX_TEXT_LENGTH) {
+    text = text.substring(0, MAX_TEXT_LENGTH) + '...[truncated]'
+  }
+
+  return { html: htmlContent, text }
 }
 
 /**
  * Check if we should analyze the current page with LLM
- * Only trigger LLM analysis if heuristics suggest it might be an order page
+ * More permissive since LLM is the source of truth for order detection
  */
 export function shouldAnalyzeWithLLM(page: {
   url: string
@@ -272,7 +318,7 @@ export function shouldAnalyzeWithLLM(page: {
   bodyText: string
 }): boolean {
   const result = isLikelyOrderConfirmationPage(page)
-  // Use a lower threshold for triggering LLM analysis
-  // LLM will make the final determination
-  return result.confidence >= 0.4 || result.triggers.length >= 1
+  // Low threshold - let LLM make the final determination
+  // Any signal is enough to trigger LLM analysis
+  return result.confidence >= 0.3 || result.triggers.length >= 1
 }

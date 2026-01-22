@@ -183,19 +183,54 @@ describe('URL Detection Heuristics', () => {
           </body>
         </html>
       `
-      const content = extractPageContent(html)
-      expect(content).toContain('Thank you for your order')
-      expect(content).toContain('Order #12345')
-      expect(content).toContain('Widget')
-      expect(content).not.toContain('console.log')
-      expect(content).not.toContain('color: red')
+      const { html: htmlContent, text } = extractPageContent(html)
+      expect(htmlContent).toContain('Thank you for your order')
+      expect(htmlContent).toContain('Order #12345')
+      expect(htmlContent).toContain('Widget')
+      expect(htmlContent).not.toContain('console.log')
+      expect(htmlContent).not.toContain('color: red')
+      expect(text).toContain('Thank you for your order')
+      expect(text).not.toContain('console.log')
     })
 
     it('limits content length', () => {
       const longContent = 'x'.repeat(100000)
       const html = `<html><body>${longContent}</body></html>`
-      const content = extractPageContent(html)
-      expect(content.length).toBeLessThanOrEqual(50000)
+      const { html: htmlContent, text } = extractPageContent(html)
+      expect(htmlContent.length).toBeLessThanOrEqual(60010) // 60000 + '[truncated]'
+      expect(text.length).toBeLessThanOrEqual(30010) // 30000 + '[truncated]'
+    })
+
+    it('preserves useful HTML attributes', () => {
+      const html = `
+        <div class="product-item" id="prod123" data-product-name="Widget">
+          <span class="product-name">Widget</span>
+          <span class="price">$19.99</span>
+        </div>
+      `
+      const { html: htmlContent } = extractPageContent(html)
+      expect(htmlContent).toContain('class="product-item"')
+      expect(htmlContent).toContain('id="prod123"')
+      expect(htmlContent).toContain('data-product-name="Widget"')
+    })
+
+    it('extracts plain text separately', () => {
+      const html = `
+        <html>
+          <body>
+            <h1>Order Confirmation</h1>
+            <p>Order #12345</p>
+            <p>Product: Widget - $19.99</p>
+          </body>
+        </html>
+      `
+      const { text } = extractPageContent(html)
+      expect(text).toContain('Order Confirmation')
+      expect(text).toContain('Order #12345')
+      expect(text).toContain('Widget')
+      // Text should not contain HTML tags
+      expect(text).not.toContain('<h1>')
+      expect(text).not.toContain('</p>')
     })
   })
 })

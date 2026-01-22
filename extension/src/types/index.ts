@@ -53,10 +53,16 @@ export interface ProductInfo {
   quantity: number
   isRecurring: boolean
   category: string | null
+  suggestedFrequencyDays: number | null  // LLM suggests based on category
+}
+
+export interface PageContent {
+  htmlContent: string
+  textContent: string
 }
 
 export interface LLMProvider {
-  analyzeOrderPage(pageContent: string): Promise<OrderAnalysis>
+  analyzeOrderPage(pageContent: string | PageContent): Promise<OrderAnalysis>
 }
 
 // Page detection types

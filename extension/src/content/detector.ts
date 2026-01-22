@@ -5,7 +5,7 @@ import {
   detectStore,
   isOrderDetailsPage
 } from '@/lib/detector'
-import type { OrderDetectedPayload } from '@/types'
+import type { OrderDetectedPayload, PageDetectionResult } from '@/types'
 
 // Debounce time to avoid multiple detections on same page
 const DETECTION_DEBOUNCE_MS = 2000
@@ -13,6 +13,57 @@ const DETECTION_DEBOUNCE_MS = 2000
 // Track if we've already processed this page
 let lastProcessedUrl = ''
 let lastProcessedTime = 0
+
+/**
+ * Wait for dynamic content to load (React, Vue, etc.)
+ * Always waits a minimum time, then watches for DOM stability
+ */
+async function waitForDynamicContent(minWaitMs = 3000, maxWaitMs = 8000): Promise<void> {
+  console.log(`[Subscribe Any] Waiting ${minWaitMs}ms for dynamic content to load...`)
+
+  // Always wait minimum time for React/Vue to hydrate and render
+  await new Promise(r => setTimeout(r, minWaitMs))
+
+  return new Promise((resolve) => {
+    let lastChangeTime = Date.now()
+    let checkCount = 0
+    const maxChecks = 50  // 50 * 100ms = 5 seconds additional max
+
+    const observer = new MutationObserver(() => {
+      lastChangeTime = Date.now()
+    })
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true
+    })
+
+    const checkStable = () => {
+      checkCount++
+      const timeSinceLastChange = Date.now() - lastChangeTime
+
+      // Page is stable if no changes for 800ms
+      if (timeSinceLastChange > 800 || checkCount >= maxChecks) {
+        observer.disconnect()
+        console.log(`[Subscribe Any] Content stabilized after ${minWaitMs + checkCount * 100}ms total`)
+        resolve()
+      } else {
+        setTimeout(checkStable, 100)
+      }
+    }
+
+    // Start checking
+    setTimeout(checkStable, 100)
+
+    // Safety timeout
+    setTimeout(() => {
+      observer.disconnect()
+      console.log(`[Subscribe Any] Max wait reached (${maxWaitMs}ms)`)
+      resolve()
+    }, maxWaitMs - minWaitMs)
+  })
+}
 
 /**
  * Main detection logic - runs when page loads
@@ -34,79 +85,137 @@ async function detectOrderConfirmation(): Promise<void> {
   const settings = await chrome.storage.sync.get(['showOnOrderDetails'])
   const showOnOrderDetails = settings.showOnOrderDetails !== false // default true
 
-  // Get page content for analysis
-  const title = document.title
-  const bodyText = extractPageContent(document.body.innerHTML)
-
-  // First check with heuristics
-  const pageInfo = { url, title, bodyText }
-  const heuristicResult = isLikelyOrderConfirmationPage(pageInfo)
+  // Quick check if this might be an order page (before waiting)
   const orderDetailsResult = isOrderDetailsPage(url)
+  const isOrderDetails = orderDetailsResult.isLikelyOrderConfirmation
+
+  console.log('[Subscribe Any] URL check:', {
+    url,
+    isOrderDetails,
+    orderDetailsConfidence: orderDetailsResult.confidence,
+    orderDetailsTriggers: orderDetailsResult.triggers,
+    urlPatternMatch: /order|checkout|confirmation|receipt/i.test(url)
+  })
+
+  // If it looks like an order page, wait for dynamic content to load
+  const shouldWait = isOrderDetails || /order|checkout|confirmation|receipt/i.test(url)
+  if (shouldWait) {
+    console.log('[Subscribe Any] URL matches order pattern, waiting for dynamic content...')
+    await waitForDynamicContent()
+    console.log('[Subscribe Any] Wait complete, proceeding with detection...')
+  } else {
+    console.log('[Subscribe Any] URL does not match order pattern, skipping wait')
+  }
+
+  // Now get page content (after dynamic content has loaded)
+  const title = document.title
+  console.log('[Subscribe Any] Extracting page content, title:', title)
+
+  let bodyHtml: string
+  let bodyText: string
+  try {
+    const extracted = extractPageContent(document.body.innerHTML)
+    bodyHtml = extracted.html
+    bodyText = extracted.text
+    console.log('[Subscribe Any] Content extracted successfully, HTML length:', bodyHtml.length, 'Text length:', bodyText.length)
+  } catch (err) {
+    console.error('[Subscribe Any] Error extracting page content:', err)
+    return
+  }
+
+  // Check with heuristics
+  const pageInfo = { url, title, bodyText }
+  let heuristicResult: PageDetectionResult
+  try {
+    heuristicResult = isLikelyOrderConfirmationPage(pageInfo)
+    console.log('[Subscribe Any] Heuristics computed:', {
+      isLikely: heuristicResult.isLikelyOrderConfirmation,
+      confidence: heuristicResult.confidence,
+      triggers: heuristicResult.triggers
+    })
+  } catch (err) {
+    console.error('[Subscribe Any] Error running heuristics:', err)
+    return
+  }
 
   console.log('[Subscribe Any] Detection check:', {
     url,
     title,
     isLikely: heuristicResult.isLikelyOrderConfirmation,
-    isOrderDetails: orderDetailsResult.isLikelyOrderConfirmation,
+    isOrderDetails,
     confidence: heuristicResult.confidence,
-    triggers: heuristicResult.triggers
+    triggers: heuristicResult.triggers,
+    htmlLength: bodyHtml.length,
+    textLength: bodyText.length,
+    bodyTextPreview: bodyText.substring(0, 200)
   })
 
-  // Check if this is an order details page (past orders)
-  const isOrderDetails = orderDetailsResult.isLikelyOrderConfirmation
+  // Determine if we should analyze this page
+  const shouldAnalyze = isOrderDetails || shouldAnalyzeWithLLM(pageInfo)
 
-  if (isOrderDetails && showOnOrderDetails) {
-    console.log('[Subscribe Any] Order details page detected, showing prompt...')
-    await showSubscriptionPrompt({
-      isOrderConfirmation: true,
-      confidence: orderDetailsResult.confidence,
-      products: [], // Will extract from DOM
-      retailer: new URL(url).hostname.replace('www.', ''),
-      orderNumber: null
-    }, url, title)
-    return
-  }
+  console.log('[Subscribe Any] Analysis decision:', {
+    shouldAnalyze,
+    isOrderDetails,
+    shouldAnalyzeWithLLM: shouldAnalyzeWithLLM(pageInfo),
+    heuristicConfidence: heuristicResult.confidence,
+    heuristicTriggers: heuristicResult.triggers.length
+  })
 
-  // Check if we should analyze with LLM for confirmation pages
-  const shouldAnalyze = shouldAnalyzeWithLLM(pageInfo)
-  console.log('[Subscribe Any] Should analyze with LLM:', shouldAnalyze)
-
-  // Only proceed if heuristics suggest it might be an order page
   if (!shouldAnalyze) {
-    console.log('[Subscribe Any] Skipping - not an order page according to heuristics')
+    console.log('[Subscribe Any] Skipping - not an order page (failed heuristics)')
     return
   }
+
+  if (isOrderDetails && !showOnOrderDetails) {
+    console.log('[Subscribe Any] Order details page, but setting disabled')
+    return
+  }
+
+  console.log('[Subscribe Any] Proceeding with LLM analysis...')
 
   // Send to background script for LLM analysis
   try {
-    console.log('[Subscribe Any] Sending to background for LLM analysis...')
+    console.log('[Subscribe Any] Sending to background for LLM analysis...', {
+      htmlPreview: bodyHtml.substring(0, 500),
+      textPreview: bodyText.substring(0, 500)
+    })
+
     const response = await chrome.runtime.sendMessage({
       type: 'ANALYZE_PAGE',
       payload: {
         url,
         title,
-        content: bodyText.substring(0, 50000), // Limit content size
-        heuristicConfidence: heuristicResult.confidence // Pass heuristic for fallback
+        htmlContent: bodyHtml,
+        textContent: bodyText,
+        heuristicConfidence: Math.max(heuristicResult.confidence, orderDetailsResult.confidence)
       }
     })
 
     console.log('[Subscribe Any] LLM response:', response)
 
-    // Use LLM result, but fall back to heuristics if LLM fails or says no
     const finalAnalysis = response?.analysis
 
-    if (finalAnalysis?.isOrderConfirmation) {
-      console.log('[Subscribe Any] Order detected! Showing subscription prompt...')
+    console.log('[Subscribe Any] Analysis details:', {
+      isOrderConfirmation: finalAnalysis?.isOrderConfirmation,
+      productsCount: finalAnalysis?.products?.length || 0,
+      products: finalAnalysis?.products,
+      retailer: finalAnalysis?.retailer,
+      orderNumber: finalAnalysis?.orderNumber,
+      confidence: finalAnalysis?.confidence
+    })
+
+    if (finalAnalysis?.isOrderConfirmation && finalAnalysis.products?.length > 0) {
+      console.log('[Subscribe Any] Order detected with products! Showing prompt...')
       await showSubscriptionPrompt(finalAnalysis, url, title)
-    } else if (heuristicResult.isLikelyOrderConfirmation && heuristicResult.confidence >= 0.8) {
-      // Trust heuristics if confidence is high
-      console.log('[Subscribe Any] Using heuristic result (high confidence)')
+    } else if (isOrderDetails || (heuristicResult.isLikelyOrderConfirmation && heuristicResult.confidence >= 0.7)) {
+      // It's an order page but LLM didn't find products - try DOM extraction
+      console.log('[Subscribe Any] Order page detected, but no LLM products. Trying DOM extraction...')
       await showSubscriptionPrompt({
         isOrderConfirmation: true,
-        confidence: heuristicResult.confidence,
-        products: [], // Will prompt to add manually
-        retailer: new URL(url).hostname.replace('www.', ''),
-        orderNumber: null
+        confidence: Math.max(heuristicResult.confidence, orderDetailsResult.confidence),
+        products: [], // Will extract from DOM in showSubscriptionPrompt
+        retailer: finalAnalysis?.retailer || new URL(url).hostname.replace('www.', ''),
+        orderNumber: finalAnalysis?.orderNumber || null
       }, url, title)
     } else {
       console.log('[Subscribe Any] Not an order page according to LLM and heuristics')
@@ -117,35 +226,47 @@ async function detectOrderConfirmation(): Promise<void> {
 }
 
 /**
- * Wait for an element to appear in the DOM
+ * Extract price from text
  */
-function waitForElement(selector: string, timeout = 3000): Promise<Element | null> {
-  return new Promise((resolve) => {
-    const element = document.querySelector(selector)
-    if (element) {
-      resolve(element)
-      return
-    }
+function extractPrice(text: string): number | null {
+  // Match various price formats: $29.99, $29, £29.99, €29.99, 29.99
+  const pricePatterns = [
+    /[\$£€]\s*(\d{1,5}(?:[.,]\d{2})?)/,  // $29.99 or $29
+    /(\d{1,5}[.,]\d{2})\s*(?:USD|AUD|EUR|GBP)?/i,  // 29.99 USD
+  ]
 
-    const observer = new MutationObserver(() => {
-      const el = document.querySelector(selector)
-      if (el) {
-        observer.disconnect()
-        resolve(el)
+  for (const pattern of pricePatterns) {
+    const match = text.match(pattern)
+    if (match) {
+      const price = parseFloat(match[1].replace(',', '.'))
+      if (price > 0 && price < 10000) {
+        return price
       }
-    })
-
-    observer.observe(document.body, { childList: true, subtree: true })
-
-    setTimeout(() => {
-      observer.disconnect()
-      resolve(null)
-    }, timeout)
-  })
+    }
+  }
+  return null
 }
 
 /**
- * Extract products from the page DOM
+ * Check if text looks like a product name (not a label/header)
+ */
+function isLikelyProductName(text: string): boolean {
+  if (!text || text.length < 4 || text.length > 200) return false
+
+  // Skip common non-product text
+  const skipPatterns = [
+    /^(your|order|thank|confirmation|item|quantity|price|total|subtotal|shipping|tax|discount|delivery|fee|promo|coupon|save|free|qty|sku|#)$/i,
+    /^(product|description|name|details|summary|receipt|invoice|billing|payment|method|address|email|phone|date|time|status|tracking)$/i,
+    /^[\d\s\-\.\,\#\:]+$/,  // Only numbers/punctuation
+    /^\$[\d\.\,]+$/,  // Just a price
+  ]
+
+  return !skipPatterns.some(p => p.test(text.trim()))
+}
+
+/**
+ * Extract products from the page DOM (fallback when LLM doesn't return products)
+ * Uses multiple strategies to find products on any e-commerce site
  */
 async function extractProductsFromDOM(): Promise<Array<{
   name: string
@@ -153,6 +274,7 @@ async function extractProductsFromDOM(): Promise<Array<{
   quantity: number
   isRecurring: boolean
   category: string | null
+  suggestedFrequencyDays: number | null
 }>> {
   const products: Array<{
     name: string
@@ -160,161 +282,214 @@ async function extractProductsFromDOM(): Promise<Array<{
     quantity: number
     isRecurring: boolean
     category: string | null
+    suggestedFrequencyDays: number | null
   }> = []
 
-  const hostname = window.location.hostname.toLowerCase()
-
-  // For Bunnings specifically, wait for order items to load
-  if (hostname.includes('bunnings')) {
-    console.log('[Subscribe Any] Waiting for Bunnings products to load...')
-    await waitForElement('.order-item', 5000)
-    await new Promise(r => setTimeout(r, 500)) // Additional delay for React rendering
-  }
-
-  // Store-specific selectors
-  const storeSelectors: Record<string, string[]> = {
-    'bunnings.com.au': [
-      '.order-item h6.MuiTypography-subtitle2',
-      '.order-item .product-info h6',
-      'h6.MuiTypography-subtitle2',
-      '.product-info-container h6',
-      'div[class*="order-item"] h6',
-      'div[class*="product-info"] h6',
-      'a[href*="_p0"] h6', // Product links have _p0178166 format
-      '.order-item',
-      '.product-info-container'
-    ],
-    'amazon': [
-      '.product-name',
-      '.a-fixed-left-grid .a-col-right',
-      '[data-asin]',
-      '.item-title',
-      '.order-item-name'
-    ],
-    'kmart.com.au': [
-      '.product-name',
-      '.item-description',
-      '[data-testid*="product"]',
-      '.cart-item-name'
-    ],
-    'target.com.au': [
-      '.product-name',
-      '.item-name',
-      '[data-test="product-name"]'
-    ]
-  }
-
-  // Get selectors for current store or use common ones
-  let productSelectors = storeSelectors[hostname] || []
-
-  // Common selectors for product names on order confirmation pages
-  const commonSelectors = [
-    '[data-product-name]',
-    '[data-testid="product-name"]',
-    '.product-name',
-    '.product-title',
-    '.product-description',
-    '.item-name',
-    '.item-title',
-    '.item-description',
-    '.order-item .name',
-    '.order-item .title',
-    '.order-item-name',
-    'tr.order-item td:first-child',
-    '.checkout-product-name',
-    '[class*="product"] [class*="name"]',
-    '[class*="product"] [class*="title"]',
-    '[class*="item"] [class*="name"]',
-    '[class*="ProductCard"] [class*="Title"]',
-    '[class*="OrderItem"] [class*="Product"]',
-    'table tr td:first-child',
-    '.cart-item .product-name',
-    '.line-item-name'
-  ]
-
-  productSelectors = [...productSelectors, ...commonSelectors]
-
-  console.log('[Subscribe Any] Extracting products from DOM, hostname:', hostname)
-
-  // Try to find products using selectors
-  for (const selector of productSelectors) {
-    try {
-      const elements = document.querySelectorAll(selector)
-      if (elements.length > 0) {
-        console.log(`[Subscribe Any] Found ${elements.length} elements with selector: ${selector}`)
-        for (const el of Array.from(elements).slice(0, 15)) {
-          const name = el.textContent?.trim()
-          // Filter out non-product names
-          if (!name || name.length < 3 || name.length > 200) continue
-          // Skip common non-product text
-          if (/^(your|order|thank|confirmation|item|quantity|price|total|subtotal|shipping|tax|discount)$/i.test(name)) continue
-
-          // Try to find price nearby
-          let price: number | null = null
-          const parent = el.closest('tr, li, .product-item, .order-item, .item, .cart-item, [class*="Product"], [class*="Item"], .line-item, .product-price-container')
-          if (parent) {
-            // Look for price in parent element
-            const priceText = parent.textContent || ''
-            // Handle $28.85 or $28<sup>.85</sup> format
-            const priceMatch = priceText.match(/\$(\d+)(?:[.<sup>]+(\d+)[</sup>]+)?\.?(\d+)?/)
-            if (priceMatch) {
-              let extractedPrice: number
-              if (priceMatch[2] && priceMatch[3]) {
-                // Format: $28<sup>.85</sup>
-                extractedPrice = parseFloat(`${priceMatch[1]}.${priceMatch[2]}`)
-              } else if (priceMatch[3]) {
-                // Format: $28.85
-                extractedPrice = parseFloat(`${priceMatch[1]}.${priceMatch[3]}`)
-              } else {
-                extractedPrice = parseFloat(priceMatch[1])
-              }
-              // Sanity check the price
-              if (extractedPrice > 0 && extractedPrice < 10000) {
-                price = extractedPrice
-              }
-            }
-          }
-
-          // Avoid duplicates
-          if (!products.some(p => p.name === name)) {
-            products.push({ name, price, quantity: 1, isRecurring: true, category: null })
-          }
-        }
-        if (products.length > 0) {
-          console.log(`[Subscribe Any] Extracted ${products.length} products from selector: ${selector}`)
-          break
-        }
-      }
-    } catch (e) {
-      // Skip invalid selectors
+  const addProduct = (name: string, price: number | null) => {
+    const cleanName = name.trim().replace(/\s+/g, ' ')
+    if (isLikelyProductName(cleanName) && !products.some(p => p.name === cleanName)) {
+      products.push({
+        name: cleanName,
+        price,
+        quantity: 1,
+        isRecurring: true,
+        category: null,
+        suggestedFrequencyDays: 30
+      })
     }
   }
 
-  // More aggressive fallback: Look for table rows with price patterns
+  // Wait briefly for dynamic content to load
+  await new Promise(r => setTimeout(r, 500))
+
+  console.log('[Subscribe Any] Extracting products from DOM (fallback)')
+
+  // Strategy 1: Parse from plain text using "N x Product Name" or "N.NN kg Product Name" pattern
+  // This handles sites like Bunnings, grocery delivery, etc.
+  // First normalize the text - replace newlines with spaces for easier matching
+  const bodyText = (document.body.textContent || '').replace(/\s+/g, ' ')
+  console.log('[Subscribe Any] Normalized bodyText (first 500 chars):', bodyText.substring(0, 500))
+
+  // Look for the "What's in order" section and extract items from there
+  const whatsInOrderMatch = bodyText.match(/What'?s in order \d+([^\[]+)/i)
+  if (whatsInOrderMatch) {
+    console.log('[Subscribe Any] Found "What\'s in order" section')
+    const orderSection = whatsInOrderMatch[1]
+
+    // Pattern for "N.NN x Product Name" or "N x Product Name"
+    const quantityProductPattern = /(\d+(?:\.\d+)?)\s*x\s*([A-Z][^]*?)(?=\s*\d+\s*(?:x|kg|$))/gi
+
+    let match
+    while ((match = quantityProductPattern.exec(orderSection)) !== null) {
+      const quantity = parseFloat(match[1])
+      let productName = match[2]?.trim() || ''
+
+      // Clean up the product name - remove trailing measurements and noise
+      productName = productName
+        .replace(/\s+\d+\s*(?:g|kg|ml|l|pcs?|pack|bunch).*$/i, '') // Remove trailing measurements
+        .replace(/\s*(?:minimum|about|approx).*$/i, '') // Remove extra words
+        .replace(/\s+/g, ' ')
+        .trim()
+
+      console.log('[Subscribe Any] Extracted product:', { productName, quantity, original: match[0] })
+
+      if (productName.length > 5 && isLikelyProductName(productName)) {
+        if (!products.some(p => p.name === productName)) {
+          products.push({
+            name: productName,
+            price: null,
+            quantity: Math.round(quantity),
+            isRecurring: true,
+            category: null,
+            suggestedFrequencyDays: 30
+          })
+        }
+      }
+    }
+  }
+
+  // If no products found with "What's in order", try other patterns
+  if (products.length === 0) {
+    // Pattern for "N.NN kg Product Name"
+    const kgPattern = /(\d+(?:\.\d+)?)\s*kg\s+([A-Z][^]*?)(?=\s*\d+\s*(?:x|kg|$)|\s*$)/gi
+    let match
+    while ((match = kgPattern.exec(bodyText)) !== null) {
+      const quantity = parseFloat(match[1])
+      let productName = match[2]?.trim() || ''
+
+      productName = productName
+        .replace(/\s+\d+\s*(?:g|kg|ml|l|pcs?|pack|bunch).*$/i, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+
+      if (productName.length > 5 && isLikelyProductName(productName)) {
+        if (!products.some(p => p.name === productName)) {
+          products.push({
+            name: productName,
+            price: null,
+            quantity: Math.round(quantity),
+            isRecurring: true,
+            category: null,
+            suggestedFrequencyDays: 30
+          })
+        }
+      }
+    }
+  }
+
+  console.log('[Subscribe Any] Text pattern extraction found', products.length, 'products')
+
+  // Strategy 2: Look for elements with product-related data attributes
+  const dataAttrSelectors = [
+    '[data-product-name]',
+    '[data-product-title]',
+    '[data-item-name]',
+    '[data-testid*="product"]',
+    '[data-test*="product"]',
+    '[data-qa*="product"]',
+  ]
+
+  for (const selector of dataAttrSelectors) {
+    try {
+      document.querySelectorAll(selector).forEach(el => {
+        const name = el.getAttribute('data-product-name') ||
+                     el.getAttribute('data-product-title') ||
+                     el.getAttribute('data-item-name') ||
+                     el.textContent?.trim()
+        if (name) {
+          const parent = el.closest('[class*="item"], [class*="product"], tr, li, article, div')
+          const price = parent ? extractPrice(parent.textContent || '') : null
+          addProduct(name, price)
+        }
+      })
+    } catch (e) { /* skip */ }
+  }
+
+  // Strategy 3: Look for common product name class patterns
+  if (products.length === 0) {
+    const classSelectors = [
+      '.product-name', '.productName', '.product_name',
+      '.product-title', '.productTitle', '.product_title',
+      '.item-name', '.itemName', '.item_name',
+      '.item-title', '.itemTitle', '.item_title',
+      '.order-item-name', '.orderItemName',
+      '.line-item-name', '.lineItemName',
+      '.cart-item-name', '.cartItemName',
+      'h1[class*="product"], h2[class*="product"], h3[class*="product"]',
+      'h1[class*="item"], h2[class*="item"], h3[class*="item"]',
+      'a[class*="product"][class*="name"], a[class*="product"][class*="title"]',
+      'span[class*="product"][class*="name"], span[class*="product"][class*="title"]',
+    ]
+
+    for (const selector of classSelectors) {
+      try {
+        const elements = document.querySelectorAll(selector)
+        if (elements.length > 0) {
+          console.log(`[Subscribe Any] Found ${elements.length} elements with: ${selector}`)
+          elements.forEach(el => {
+            const name = el.textContent?.trim()
+            if (name) {
+              const parent = el.closest('tr, li, article, [class*="item"], [class*="product"], [class*="row"]')
+              const price = parent ? extractPrice(parent.textContent || '') : null
+              addProduct(name, price)
+            }
+          })
+          if (products.length > 0) break
+        }
+      } catch (e) { /* skip invalid selector */ }
+    }
+  }
+
+  // Strategy 4: Look for order item containers and extract text
+  if (products.length === 0) {
+    const containerSelectors = [
+      '.order-item', '.orderItem', '.order_item',
+      '.cart-item', '.cartItem', '.cart_item',
+      '.line-item', '.lineItem', '.line_item',
+      '.product-item', '.productItem', '.product_item',
+      '[class*="OrderItem"]', '[class*="CartItem"]', '[class*="LineItem"]',
+      '[class*="order-item"]', '[class*="cart-item"]', '[class*="line-item"]',
+    ]
+
+    for (const selector of containerSelectors) {
+      try {
+        const containers = document.querySelectorAll(selector)
+        if (containers.length > 0) {
+          console.log(`[Subscribe Any] Found ${containers.length} containers with: ${selector}`)
+          containers.forEach(container => {
+            // Look for the most prominent text that could be a product name
+            const candidates = container.querySelectorAll('h1, h2, h3, h4, h5, h6, a, span, p, div')
+            for (const el of Array.from(candidates)) {
+              const text = el.textContent?.trim()
+              if (text && text.length > 5 && text.length < 150 && isLikelyProductName(text)) {
+                const price = extractPrice(container.textContent || '')
+                addProduct(text, price)
+                break  // Take first good match per container
+              }
+            }
+          })
+          if (products.length > 0) break
+        }
+      } catch (e) { /* skip */ }
+    }
+  }
+
+  // Strategy 5: Look for tables (common in order confirmations)
   if (products.length === 0) {
     console.log('[Subscribe Any] Trying table-based extraction...')
     const tables = document.querySelectorAll('table')
     for (const table of Array.from(tables).slice(0, 5)) {
       const rows = table.querySelectorAll('tr')
       for (const row of Array.from(rows)) {
-        const cells = row.querySelectorAll('td, th')
-        if (cells.length >= 2) {
-          const rowText = row.textContent?.trim() || ''
-          // Look for price in this row
-          const priceMatch = rowText.match(/[\$£€]?\s?(\d{1,4}\.?\d{2})/)
-          if (priceMatch) {
-            const price = parseFloat(priceMatch[1])
-            if (price > 0 && price < 10000) {
-              // Get text from first non-price cell as product name
-              const firstCell = cells[0].textContent?.trim()
-              if (firstCell && firstCell.length > 3 && firstCell.length < 200) {
-                // Skip if it looks like a header/total row
-                if (!/quantity|price|total|subtotal|shipping|tax|discount|item#/i.test(firstCell)) {
-                  if (!products.some(p => p.name === firstCell)) {
-                    products.push({ name: firstCell, price, quantity: 1, isRecurring: true, category: null })
-                  }
-                }
-              }
+        const cells = row.querySelectorAll('td')
+        if (cells.length >= 1) {
+          // Try each cell as potential product name
+          for (const cell of Array.from(cells)) {
+            const text = cell.textContent?.trim()
+            if (text && isLikelyProductName(text)) {
+              const price = extractPrice(row.textContent || '')
+              addProduct(text, price)
+              break  // One product per row
             }
           }
         }
@@ -323,32 +498,31 @@ async function extractProductsFromDOM(): Promise<Array<{
     }
   }
 
-  // Final fallback: Look for any structured list items that might be products
+  // Strategy 6: Look for list items with prices
   if (products.length === 0) {
-    const listItems = document.querySelectorAll('li, tr')
-    for (const item of Array.from(listItems).slice(0, 100)) {
-      const text = item.textContent?.trim()
-      if (!text || text.length < 10 || text.length > 300) continue
+    console.log('[Subscribe Any] Trying list-based extraction...')
+    const listItems = document.querySelectorAll('li, div[class*="item"], div[class*="row"]')
+    for (const item of Array.from(listItems).slice(0, 50)) {
+      const text = item.textContent?.trim() || ''
+      const price = extractPrice(text)
 
-      // Look for lines with prices
-      const priceMatch = text.match(/(\d{1,4}\.\d{2})/)
-      if (priceMatch) {
-        // Extract potential product name (text before price)
-        const beforePrice = text.substring(0, text.indexOf(priceMatch[1])).trim()
-        if (beforePrice.length > 5 && beforePrice.length < 100) {
-          // Skip if it looks like a total/subtotal line
-          if (!/subtotal|total|tax|shipping|delivery|discount|promo|fee|item#/i.test(beforePrice)) {
-            const name = beforePrice.replace(/^[\d\s\-\•]+/, '').trim()
-            if (name && !products.some(p => p.name === name)) {
-              products.push({
-                name,
-                price: parseFloat(priceMatch[1]),
-                quantity: 1,
-                isRecurring: true,
-                category: null
-              })
-            }
-          }
+      if (price) {
+        // Find the longest text segment that looks like a product name
+        const textNodes: string[] = []
+        const walker = document.createTreeWalker(item, NodeFilter.SHOW_TEXT)
+        let node
+        while ((node = walker.nextNode())) {
+          const t = node.textContent?.trim()
+          if (t && t.length > 5) textNodes.push(t)
+        }
+
+        // Pick the best candidate (longest text that's not a price)
+        const candidate = textNodes
+          .filter(t => isLikelyProductName(t) && !t.includes('$'))
+          .sort((a, b) => b.length - a.length)[0]
+
+        if (candidate) {
+          addProduct(candidate, price)
         }
       }
     }
@@ -380,7 +554,7 @@ async function showSubscriptionPrompt(
     console.log('[Subscribe Any] No products from analysis, extracting from DOM...')
     productsToShow = await extractProductsFromDOM()
     if (productsToShow.length === 0) {
-      productsToShow = [{ name: 'Items from this order', price: null, quantity: 1, isRecurring: true, category: null }]
+      productsToShow = [{ name: 'Items from this order', price: null, quantity: 1, isRecurring: true, category: null, suggestedFrequencyDays: 30 }]
     }
   }
 
@@ -542,6 +716,17 @@ async function showSubscriptionPrompt(
         color: #666;
       }
 
+      .sa-suggested-freq {
+        display: inline-block;
+        margin-left: 8px;
+        padding: 2px 8px;
+        background: #e0e7ff;
+        color: #4338ca;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 500;
+      }
+
       .sa-footer {
         padding: 20px;
         border-top: 1px solid #e5e5e5;
@@ -644,20 +829,35 @@ async function showSubscriptionPrompt(
   document.body.appendChild(backdrop)
   document.body.appendChild(container)
 
+  // Helper to convert days to label
+  function frequencyDaysToLabel(days: number | null): string {
+    if (!days) return ''
+    if (days <= 7) return 'Weekly'
+    if (days <= 14) return 'Bi-weekly'
+    if (days <= 30) return 'Monthly'
+    if (days <= 60) return 'Every 2 months'
+    return 'Quarterly'
+  }
+
   // Populate products
   const productsContainer = document.getElementById('sa-products')!
   const selectedProducts = new Set<number>()
 
   productsToShow.forEach((product, index) => {
+    const suggestedLabel = product.suggestedFrequencyDays
+      ? frequencyDaysToLabel(product.suggestedFrequencyDays)
+      : null
+
     const productEl = document.createElement('div')
     productEl.className = 'sa-product'
     productEl.innerHTML = `
-      <input type="checkbox" class="sa-checkbox" data-index="${index}">
+      <input type="checkbox" class="sa-checkbox" data-index="${index}" data-frequency="${product.suggestedFrequencyDays || 30}">
       <div class="sa-product-info">
         <div class="sa-product-name">${escapeHtml(product.name)}</div>
         <div class="sa-product-price">
           ${product.price ? `$${product.price.toFixed(2)}` : ''}
           ${product.category ? `• ${escapeHtml(product.category)}` : ''}
+          ${suggestedLabel ? `<span class="sa-suggested-freq">Suggested: ${suggestedLabel}</span>` : ''}
         </div>
       </div>
     `
@@ -667,6 +867,19 @@ async function showSubscriptionPrompt(
       if (checkbox.checked) {
         selectedProducts.add(index)
         productEl.classList.add('selected')
+        // Update frequency dropdown to match first selected product's suggestion
+        if (selectedProducts.size === 1) {
+          const suggestedDays = product.suggestedFrequencyDays
+          if (suggestedDays) {
+            const frequencySelect = document.getElementById('sa-frequency') as HTMLSelectElement
+            // Find the closest matching frequency option
+            const options = [7, 14, 30, 60, 90]
+            const closest = options.reduce((prev, curr) =>
+              Math.abs(curr - suggestedDays) < Math.abs(prev - suggestedDays) ? curr : prev
+            )
+            frequencySelect.value = String(closest)
+          }
+        }
       } else {
         selectedProducts.delete(index)
         productEl.classList.remove('selected')
